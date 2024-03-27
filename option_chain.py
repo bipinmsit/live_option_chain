@@ -3,13 +3,19 @@ import json
 import pandas as pd
 import xlwings as xw
 import time
+from get_parameter import read_parameters_from_excel
+import threading
 
-index_options = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
+
+index_options = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"]
+number_of_strike = ["3", "5", "10", "15", "20"]
 
 # Parameters
 sym = "NIFTY"
 exp_date = "28-Mar-2024"
-interval = 180  # In seconds
+number_of_strike_buffer = 5
+interval = 120  # In seconds
+
 next_row = 5  # PCR Column Values
 call_oi_chg_column = "K2"
 put_oi_chg_column = "K3"
@@ -18,10 +24,12 @@ file = xw.Book(
     r"C:\Users\bipin\OneDrive\Desktop\bipinmsit\tradetools\option_chain.xlsx"
 )
 sh1 = file.sheets("option_chain")
-
 # Column range to clear
 column_to_clear = "A"
 column_range = sh1.range("A:H")
+
+# test = read_parameters_from_excel(file, "option_chain", "Spot")
+# print("dddddddddd", test)
 
 
 def oc_api_res(symbol):
@@ -69,7 +77,20 @@ def oc_spot(symbol):
         return spot
 
 
-def oc(symbol, expiry_date):
+def nearest_multiple_of_50(number):
+    return round(number / 50) * 50
+
+
+def nearest_multiple_of_100(number):
+    return round(number / 100) * 100
+
+
+def nearest_multiple_of_25(number):
+    return round(number / 25) * 25
+
+
+def oc(symbol, expiry_date, no_of_strike):
+    nearest_strike = ""
     res = oc_api_res(symbol)
     strike_data = json.loads(str(res))
 
@@ -92,12 +113,40 @@ def oc(symbol, expiry_date):
             except:
                 pass
 
+    spot = strike_data["records"]["underlyingValue"]
+    if sym == "NIFTY" or sym == "FINNIFTY":
+        nearest_strike = nearest_multiple_of_50(spot)
+    elif sym == "BANKNIFTY" or sym == "SENSEX":
+        nearest_strike = nearest_multiple_of_100(spot)
+    else:
+        nearest_strike = nearest_multiple_of_25(spot)
+
+    buffer_strike = 50 * no_of_strike
+    number_of_strike_above = nearest_strike + buffer_strike
+    number_of_strike_below = nearest_strike - buffer_strike
+
     ce_df = pd.DataFrame.from_dict(ce).transpose()
     ce_df.columns += "_CE"
+
+    ce_df = ce_df[ce_df["strikePrice_CE"] >= number_of_strike_below]
+    ce_df = ce_df.rename(
+        columns={
+            "strikePrice_CE": "strikePrice",
+        }
+    )
+
     pe_df = pd.DataFrame.from_dict(pe).transpose()
     pe_df.columns += "_PE"
 
-    df = pd.concat([ce_df, pe_df], axis=1)
+    pe_df = pe_df[pe_df["strikePrice_PE"] <= number_of_strike_above]
+    pe_df = pe_df.rename(
+        columns={
+            "strikePrice_PE": "strikePrice",
+        }
+    )
+
+    # Merge based on common column 'ID'
+    df = pd.merge(ce_df, pe_df, on="strikePrice", how="inner")
 
     # Selected DataFrame
     df_selected = df[
@@ -105,7 +154,7 @@ def oc(symbol, expiry_date):
             "lastPrice_CE",
             "openInterest_CE",
             "changeinOpenInterest_CE",
-            "strikePrice_CE",
+            "strikePrice",
             "changeinOpenInterest_PE",
             "openInterest_PE",
             "lastPrice_PE",
@@ -117,7 +166,7 @@ def oc(symbol, expiry_date):
             "lastPrice_CE": "Call_LTP",
             "openInterest_CE": "Call_OI",
             "changeinOpenInterest_CE": "OI_Chg",
-            "strikePrice_CE": "Strike",
+            "strikePrice": "Strike",
             "changeinOpenInterest_PE": "OI_Chg",
             "openInterest_PE": "Put_OI",
             "lastPrice_PE": "Put_LTP",
@@ -144,7 +193,13 @@ def create_dropdown_in_excel(sheet, options, dropdown_range):
 
 # Create dropdown of index and expiry date
 create_dropdown_in_excel(sh1, index_options, "L2:L10")
-create_dropdown_in_excel(sh1, oc_expiry_list("NIFTY"), "M2:M10")
+create_dropdown_in_excel(sh1, oc_expiry_list(sym), "M2:M10")
+create_dropdown_in_excel(sh1, number_of_strike, "N2:N10")
+
+# Delete the records from the specified range
+last_row_no_strike = sh1.range("N" + str(sh1.cells.last_cell.row)).end("up").row
+unwanted_row_no_strike_delete = "N3:N" + str(last_row_no_strike)
+sh1.range(unwanted_row_no_strike_delete).api.Delete()
 
 # Delete the records from the specified range
 last_row_expiry = sh1.range("M" + str(sh1.cells.last_cell.row)).end("up").row
@@ -152,9 +207,9 @@ unwanted_row_expiry_delete = "M3:M" + str(last_row_expiry)
 sh1.range(unwanted_row_expiry_delete).api.Delete()
 
 # Delete the records from the specified range
-last_row_expiry = sh1.range("L" + str(sh1.cells.last_cell.row)).end("up").row
-unwanted_row_expiry_delete = "L3:L" + str(last_row_expiry)
-sh1.range(unwanted_row_expiry_delete).api.Delete()
+last_row_options = sh1.range("L" + str(sh1.cells.last_cell.row)).end("up").row
+unwanted_row_options_delete = "L3:L" + str(last_row_options)
+sh1.range(unwanted_row_options_delete).api.Delete()
 
 # Delete the records from the specified range
 last_row_pcr_change = sh1.range("K" + str(sh1.cells.last_cell.row)).end("up").row
@@ -169,7 +224,7 @@ sh1.range(unwanted_row_time_delete).api.Delete()
 
 while True:
     try:
-        data = oc(sym, exp_date)
+        data = oc(sym, exp_date, number_of_strike_buffer)
         # Clear sheet with every interval
         # sh1.clear()
         column_range.clear_contents()
@@ -185,7 +240,7 @@ while True:
         sh1.range("J{}".format(next_row)).value = curr_time
         sh1.range("K{}".format(next_row)).value = pcr
 
-        sh1.range("N2").value = oc_spot("NIFTY")
+        sh1.range("O2").value = oc_spot(sym)
 
         # Save the sheet
         file.save()
