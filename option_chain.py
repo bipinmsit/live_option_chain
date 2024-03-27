@@ -8,7 +8,7 @@ import threading
 
 
 index_options = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"]
-number_of_strike = ["3", "5", "10", "15", "20"]
+number_of_strike = ["5", "3", "10", "15", "20"]
 
 # Parameters
 sym = "NIFTY"
