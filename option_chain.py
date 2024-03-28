@@ -15,12 +15,6 @@ parameters_output = (
 )
 
 # # Parameters
-# # sym = "NIFTY"
-# sym = read_parameters_from_excel(excel_file_path, "option_chain", "L2")
-# # exp_date = "28-Mar-2024"
-# exp_date = read_parameters_from_excel(excel_file_path, "option_chain", "M2")
-# # number_of_strike_buffer = 5
-# Parameters
 sym = read_parameters_from_excel(excel_file_path, "option_chain", "L2")
 if sym == "NIFTY":
     exp_date = read_parameters_from_excel(excel_file_path, "option_chain", "M2")
@@ -46,8 +40,6 @@ with open(parameters_output, "w") as f:
         ),
         file=f,
     )
-
-# interval = 120  # In seconds
 
 
 next_row = 5  # PCR Column Values
@@ -327,14 +319,14 @@ create_dropdown_in_excel(sh1, midcpnifty_expiry_list, "P2:P2")
 create_dropdown_in_excel(sh1, number_of_strike, "Q2:Q2")
 
 
-sh1.range("Q3:Q20").clear_contents()
-sh1.range("P3:P20").clear_contents()
-sh1.range("O3:O20").clear_contents()
-sh1.range("N3:N20").clear_contents()
-sh1.range("M3:M20").clear_contents()
-sh1.range("L3:L20").clear_contents()
-sh1.range("K5:K1000").clear_contents()
-sh1.range("J5:J1000").clear_contents()
+sh1.range("Q3:Q20").clear()
+sh1.range("P3:P20").clear()
+sh1.range("O3:O20").clear()
+sh1.range("N3:N20").clear()
+sh1.range("M3:M20").clear()
+sh1.range("L3:L20").clear()
+sh1.range("K5:K1000").clear()
+sh1.range("J5:J1000").clear()
 
 
 old_pcr = None
