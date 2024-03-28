@@ -4,32 +4,62 @@ import pandas as pd
 import xlwings as xw
 import time
 from get_parameter import read_parameters_from_excel
-import threading
 
+index_options = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY"]
+number_of_strike = ["3", "5", "10", "15", "20"]
+excel_file_path = (
+    r"C:\Users\bipin\OneDrive\Desktop\bipinmsit\tradetools\option_chain.xlsx"
+)
+parameters_output = (
+    r"C:\Users\bipin\OneDrive\Desktop\bipinmsit\tradetools\parameters.txt"
+)
 
-index_options = ["NIFTY", "BANKNIFTY", "FINNIFTY", "MIDCPNIFTY", "SENSEX"]
-number_of_strike = ["5", "3", "10", "15", "20"]
-
+# # Parameters
+# # sym = "NIFTY"
+# sym = read_parameters_from_excel(excel_file_path, "option_chain", "L2")
+# # exp_date = "28-Mar-2024"
+# exp_date = read_parameters_from_excel(excel_file_path, "option_chain", "M2")
+# # number_of_strike_buffer = 5
 # Parameters
-sym = "NIFTY"
-exp_date = "28-Mar-2024"
-number_of_strike_buffer = 5
-interval = 120  # In seconds
+sym = read_parameters_from_excel(excel_file_path, "option_chain", "L2")
+if sym == "NIFTY":
+    exp_date = read_parameters_from_excel(excel_file_path, "option_chain", "M2")
+elif sym == "BANKNIFTY":
+    exp_date = read_parameters_from_excel(excel_file_path, "option_chain", "N2")
+elif sym == "FINNIFTY":
+    exp_date = read_parameters_from_excel(excel_file_path, "option_chain", "O2")
+else:
+    exp_date = read_parameters_from_excel(excel_file_path, "option_chain", "P2")
+number_of_strike_buffer = int(
+    read_parameters_from_excel(excel_file_path, "option_chain", "Q2")
+)
+interval = 1  # In seconds
+print(
+    "index: {}, expiry_date: {}, no_of_strike: {}, time_stamp: {}".format(
+        sym, exp_date, number_of_strike_buffer, interval
+    )
+)
+with open(parameters_output, "w") as f:
+    print(
+        "index: {}, expiry_date: {}, no_of_strike: {}, time_stamp: {}".format(
+            sym, exp_date, number_of_strike_buffer, interval
+        ),
+        file=f,
+    )
+
+# interval = 120  # In seconds
+
 
 next_row = 5  # PCR Column Values
 call_oi_chg_column = "K2"
 put_oi_chg_column = "K3"
 
-file = xw.Book(
-    r"C:\Users\bipin\OneDrive\Desktop\bipinmsit\tradetools\option_chain.xlsx"
-)
+file = xw.Book(excel_file_path)
 sh1 = file.sheets("option_chain")
+
 # Column range to clear
 column_to_clear = "A"
 column_range = sh1.range("A:H")
-
-# test = read_parameters_from_excel(file, "option_chain", "Spot")
-# print("dddddddddd", test)
 
 
 def oc_api_res(symbol):
@@ -89,8 +119,98 @@ def nearest_multiple_of_25(number):
     return round(number / 25) * 25
 
 
+def download_data(symbol, no_of_strike):
+    nearest_strike = ""
+    buffer_strike = ""
+    res = oc_api_res(symbol)
+    strike_data = json.loads(str(res))
+
+    ce = {}
+    pe = {}
+
+    n = 0
+    m = 0
+
+    for i in strike_data["records"]["data"]:
+        try:
+            ce[n] = i["CE"]
+            n = n + 1
+        except:
+            pass
+        try:
+            pe[m] = i["PE"]
+            m = m + 1
+        except:
+            pass
+
+    spot = strike_data["records"]["underlyingValue"]
+    if sym == "NIFTY" or sym == "FINNIFTY":
+        nearest_strike = nearest_multiple_of_50(spot)
+        buffer_strike = 50 * no_of_strike
+    elif sym == "BANKNIFTY" or sym == "SENSEX":
+        nearest_strike = nearest_multiple_of_100(spot)
+        buffer_strike = 100 * no_of_strike
+    else:
+        nearest_strike = nearest_multiple_of_25(spot)
+        buffer_strike = 25 * no_of_strike
+
+    number_of_strike_above = nearest_strike + buffer_strike
+    number_of_strike_below = nearest_strike - buffer_strike
+
+    ce_df = pd.DataFrame.from_dict(ce).transpose()
+    ce_df.columns += "_CE"
+
+    ce_df = ce_df[ce_df["strikePrice_CE"] >= number_of_strike_below]
+    ce_df = ce_df.rename(
+        columns={
+            "strikePrice_CE": "strikePrice",
+        }
+    )
+
+    pe_df = pd.DataFrame.from_dict(pe).transpose()
+    pe_df.columns += "_PE"
+
+    pe_df = pe_df[pe_df["strikePrice_PE"] <= number_of_strike_above]
+    pe_df = pe_df.rename(
+        columns={
+            "strikePrice_PE": "strikePrice",
+        }
+    )
+
+    # Merge based on common column 'ID'
+    df = pd.merge(ce_df, pe_df, on="strikePrice", how="inner")
+
+    # Selected DataFrame
+    df_selected = df[
+        [
+            "lastPrice_CE",
+            "openInterest_CE",
+            "changeinOpenInterest_CE",
+            "strikePrice",
+            "changeinOpenInterest_PE",
+            "openInterest_PE",
+            "lastPrice_PE",
+        ]
+    ]
+
+    final_df = df_selected.rename(
+        columns={
+            "lastPrice_CE": "Call_LTP",
+            "openInterest_CE": "Call_OI",
+            "changeinOpenInterest_CE": "OI_Chg",
+            "strikePrice": "Strike",
+            "changeinOpenInterest_PE": "OI_Chg",
+            "openInterest_PE": "Put_OI",
+            "lastPrice_PE": "Put_LTP",
+        }
+    )
+
+    return final_df
+
+
 def oc(symbol, expiry_date, no_of_strike):
     nearest_strike = ""
+    buffer_strike = ""
     res = oc_api_res(symbol)
     strike_data = json.loads(str(res))
 
@@ -116,12 +236,14 @@ def oc(symbol, expiry_date, no_of_strike):
     spot = strike_data["records"]["underlyingValue"]
     if sym == "NIFTY" or sym == "FINNIFTY":
         nearest_strike = nearest_multiple_of_50(spot)
+        buffer_strike = 50 * no_of_strike
     elif sym == "BANKNIFTY" or sym == "SENSEX":
         nearest_strike = nearest_multiple_of_100(spot)
+        buffer_strike = 100 * no_of_strike
     else:
         nearest_strike = nearest_multiple_of_25(spot)
+        buffer_strike = 25 * no_of_strike
 
-    buffer_strike = 50 * no_of_strike
     number_of_strike_above = nearest_strike + buffer_strike
     number_of_strike_below = nearest_strike - buffer_strike
 
@@ -191,37 +313,32 @@ def create_dropdown_in_excel(sheet, options, dropdown_range):
     )
 
 
+nifty_expiry_list = oc_expiry_list("NIFTY")
+banknifty_expiry_list = oc_expiry_list("BANKNIFTY")
+finnifty_expiry_list = oc_expiry_list("FINNIFTY")
+midcpnifty_expiry_list = oc_expiry_list("MIDCPNIFTY")
+
 # Create dropdown of index and expiry date
-create_dropdown_in_excel(sh1, index_options, "L2:L10")
-create_dropdown_in_excel(sh1, oc_expiry_list(sym), "M2:M10")
-create_dropdown_in_excel(sh1, number_of_strike, "N2:N10")
-
-# Delete the records from the specified range
-last_row_no_strike = sh1.range("N" + str(sh1.cells.last_cell.row)).end("up").row
-unwanted_row_no_strike_delete = "N3:N" + str(last_row_no_strike)
-sh1.range(unwanted_row_no_strike_delete).api.Delete()
-
-# Delete the records from the specified range
-last_row_expiry = sh1.range("M" + str(sh1.cells.last_cell.row)).end("up").row
-unwanted_row_expiry_delete = "M3:M" + str(last_row_expiry)
-sh1.range(unwanted_row_expiry_delete).api.Delete()
-
-# Delete the records from the specified range
-last_row_options = sh1.range("L" + str(sh1.cells.last_cell.row)).end("up").row
-unwanted_row_options_delete = "L3:L" + str(last_row_options)
-sh1.range(unwanted_row_options_delete).api.Delete()
-
-# Delete the records from the specified range
-last_row_pcr_change = sh1.range("K" + str(sh1.cells.last_cell.row)).end("up").row
-unwanted_row_pcr_change_delete = "K5:K" + str(last_row_pcr_change)
-sh1.range(unwanted_row_pcr_change_delete).api.Delete()
-
-# Delete the records from the specified range
-last_row_time = sh1.range("J" + str(sh1.cells.last_cell.row)).end("up").row
-unwanted_row_time_delete = "j5:J" + str(last_row_time)
-sh1.range(unwanted_row_time_delete).api.Delete()
+create_dropdown_in_excel(sh1, index_options, "L2:L2")
+create_dropdown_in_excel(sh1, nifty_expiry_list, "M2:M2")
+create_dropdown_in_excel(sh1, banknifty_expiry_list, "N2:N2")
+create_dropdown_in_excel(sh1, finnifty_expiry_list, "O2:O2")
+create_dropdown_in_excel(sh1, midcpnifty_expiry_list, "P2:P2")
+create_dropdown_in_excel(sh1, number_of_strike, "Q2:Q2")
 
 
+sh1.range("Q3:Q20").clear_contents()
+sh1.range("P3:P20").clear_contents()
+sh1.range("O3:O20").clear_contents()
+sh1.range("N3:N20").clear_contents()
+sh1.range("M3:M20").clear_contents()
+sh1.range("L3:L20").clear_contents()
+sh1.range("K5:K1000").clear_contents()
+sh1.range("J5:J1000").clear_contents()
+
+
+old_pcr = None
+old_spot = None
 while True:
     try:
         data = oc(sym, exp_date, number_of_strike_buffer)
@@ -233,14 +350,25 @@ while True:
         total_call_change = sh1.range(call_oi_chg_column).value
         total_put_change = sh1.range(put_oi_chg_column).value
 
-        pcr = round(total_put_change / total_call_change, 3)
-        print("PCR: ", pcr)
+        new_pcr = round(total_put_change / total_call_change, 3)
+        print("PCR_CHANGE: ", new_pcr)
 
-        curr_time = time.strftime("%H:%M:%S", time.localtime())
-        sh1.range("J{}".format(next_row)).value = curr_time
-        sh1.range("K{}".format(next_row)).value = pcr
+        # Check if new value is different from old value
+        if new_pcr != old_pcr:
+            curr_time = time.strftime("%H:%M:%S", time.localtime())
+            sh1.range("J{}".format(next_row)).value = curr_time
+            sh1.range("K{}".format(next_row)).value = new_pcr
 
-        sh1.range("O2").value = oc_spot(sym)
+            next_row = next_row + 1
+
+        # Update old value
+        old_pcr = new_pcr
+
+        new_spot = oc_spot(sym)
+        if new_spot != old_spot:
+            sh1.range("R2").value = oc_spot(sym)
+
+        old_spot = new_spot
 
         # Save the sheet
         file.save()
@@ -248,7 +376,6 @@ while True:
 
         time.sleep(interval)
 
-        next_row = next_row + 1
     except:
         print("Retrying")
         time.sleep(5)
